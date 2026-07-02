@@ -2,19 +2,20 @@
     color-scheme: dark light;
 }
 
+/* ROOT & BODY SETUP */
 body {
     font-family: sans-serif;
-    text-align: center;
-    padding: 20px 10px;
     background-color: #121212;
     color: #e0e0e0;
     transition: background-color 0.3s, color 0.3s;
+    margin: 0;
+    padding: 20px 10px;
     display: flex;
-    flex-direction: column;
-    align-items: center;
+    justify-content: center;
+    align-items: flex-start;
     min-height: 100vh;
     box-sizing: border-box;
-    margin: 0;
+    overflow: auto; /* Default scroll behavior */
 }
 
 body.light-mode {
@@ -22,22 +23,73 @@ body.light-mode {
     color: #000;
 }
 
-h1 { margin-top: 20px; margin-bottom: 10px; }
-h2 { font-size: 1.2em; border-bottom: 1px solid #444; padding-bottom: 5px; margin-top: 0; }
-body.light-mode h2 { border-bottom-color: #ccc; }
+/* --- MOBILE MODE LOCK --- */
+body.mobile-mode {
+    overflow: hidden; /* Disables scrollbars */
+    touch-action: none; /* Disables browser gestures globally */
+    position: fixed;
+    width: 100%;
+    height: 100%;
+    top: 0;
+    left: 0;
+    padding: 0;
+    align-items: center; /* Center vertically when locked */
+}
 
-#dark-mode-toggle {
-    position: absolute;
+/* --- SCALING CONTAINERS --- */
+#app-container {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    width: 100%;
+    flex-grow: 1;
+}
+
+#app-screen {
+    width: 100%;
+    max-width: 850px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    transform-origin: center center;
+    flex-shrink: 0;
+}
+
+body.mobile-mode #app-screen {
+    width: 850px; /* Fixed Base Width for scaling */
+    height: 950px; /* Fixed Base Height for scaling */
+    justify-content: center;
+}
+
+/* --- TOGGLE BUTTONS --- */
+#mobile-btn, #dark-mode-toggle {
+    position: fixed;
     top: 10px;
-    right: 10px;
+    z-index: 2000;
     padding: 8px 12px;
     cursor: pointer;
     background: #333;
     color: #fff;
     border: 1px solid #555;
     border-radius: 5px;
+    font-size: 14px;
 }
-body.light-mode #dark-mode-toggle { background: #ddd; color: #000; border: 1px solid #bbb; }
+body.light-mode #mobile-btn, body.light-mode #dark-mode-toggle {
+    background: #ddd; color: #000; border: 1px solid #bbb;
+}
+#mobile-btn { left: 10px; }
+#dark-mode-toggle { right: 10px; }
+
+/* Hide buttons when in mobile fullscreen mode */
+body.mobile-mode #mobile-btn,
+body.mobile-mode #dark-mode-toggle { 
+    display: none; 
+}
+
+/* --- MAIN UI STYLES --- */
+h1 { margin-top: 20px; margin-bottom: 10px; }
+h2 { font-size: 1.2em; border-bottom: 1px solid #444; padding-bottom: 5px; margin-top: 0; }
+body.light-mode h2 { border-bottom-color: #ccc; }
 
 #audio-status {
     margin: 5px auto 15px;
@@ -45,6 +97,7 @@ body.light-mode #dark-mode-toggle { background: #ddd; color: #000; border: 1px s
     font-weight: bold;
     border-radius: 5px;
     min-width: 250px;
+    text-align: center;
 }
 #audio-status.ready { color: #33dd33; background-color: rgba(51, 221, 51, 0.1); }
 #audio-status.error { color: #ff5555; background-color: rgba(255, 85, 85, 0.1); }
@@ -56,11 +109,17 @@ body.light-mode #dark-mode-toggle { background: #ddd; color: #000; border: 1px s
     border-radius: 8px;
     margin-bottom: 20px;
     width: 100%;
-    max-width: 800px;
     box-sizing: border-box;
     box-shadow: 0 4px 6px rgba(0,0,0,0.3);
 }
 body.light-mode .panel { background: #d8d8d8; box-shadow: 0 4px 6px rgba(0,0,0,0.1); }
+
+/* --- TIGHTEN UI IN MOBILE MODE --- */
+body.mobile-mode h1 { margin: 0 0 5px 0; font-size: 1.8em; }
+body.mobile-mode #audio-status { margin-bottom: 5px; padding: 4px 8px; }
+body.mobile-mode .panel { margin-bottom: 10px; padding: 15px; }
+body.mobile-mode h2 { margin-bottom: 10px; }
+body.mobile-mode .action-buttons { margin: 10px 0; }
 
 .controls-container {
     display: flex;
@@ -93,6 +152,7 @@ button { cursor: pointer; padding: 8px 15px; font-weight: bold; }
 button:active { filter: brightness(1.2); }
 button:disabled { opacity: 0.5; cursor: not-allowed; }
 
+/* --- TEXT AREA (WITH SCROLLING FIX) --- */
 textarea {
     width: 100%;
     height: 80px;
@@ -104,8 +164,12 @@ textarea {
     box-sizing: border-box;
     font-size: 1.1em;
     resize: vertical;
+    /* OVERRIDE TOUCH-ACTION TO ALLOW SCROLLING IN LOCKED SCREEN */
+    touch-action: pan-y; 
+    overflow-y: auto;
 }
 body.light-mode textarea { background: #fff; color: #000; border: 1px solid #ccc; }
+body.mobile-mode textarea { height: 70px; } /* Slightly taller for usability */
 
 .action-buttons {
     display: flex;
@@ -116,8 +180,10 @@ body.light-mode textarea { background: #fff; color: #000; border: 1px solid #ccc
 }
 .loop-label { display: flex; align-items: center; gap: 5px; cursor: pointer; }
 
+/* --- VISUAL DISPLAY (WITH SCROLLING FIX) --- */
 .visual-display {
     min-height: 60px;
+    max-height: 150px; /* Prevent it from expanding out of screen bounds */
     background: #111;
     border: 2px inset #333;
     padding: 15px;
@@ -128,7 +194,12 @@ body.light-mode textarea { background: #fff; color: #000; border: 1px solid #ccc
     word-wrap: break-word;
     text-align: left;
     color: #ffaa00;
+    /* OVERRIDE TOUCH-ACTION TO ALLOW SCROLLING IN LOCKED SCREEN */
+    touch-action: pan-y; 
+    overflow-y: auto;
 }
+body.mobile-mode .visual-display { max-height: 120px; } /* Keep it contained on mobile */
+
 body.light-mode .visual-display { background: #eee; border-color: #ccc; color: #dd6600; }
 
 .visual-display span { transition: color 0.1s; }
@@ -138,7 +209,7 @@ body.light-mode .visual-display span.active { color: #fff; background: #dd6600; 
 .decoded-display { color: #66aaff; font-size: 1.5em; letter-spacing: normal; }
 body.light-mode .decoded-display { color: #0055cc; }
 
-.instructions { font-size: 0.8em; color: #aaa; margin-top: 10px; }
+.instructions { font-size: 0.8em; color: #aaa; margin-top: 10px; text-align: center; }
 body.light-mode .instructions { color: #555; }
 
 #signal-meter {

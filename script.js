@@ -3,6 +3,46 @@ document.addEventListener('DOMContentLoaded', () => {
     const darkModeToggle = document.getElementById('dark-mode-toggle');
     const statusDiv = document.getElementById('audio-status');
     const body = document.body;
+    const mobileToggleBtn = document.getElementById('mobile-btn');
+    const screenElement = document.getElementById("app-screen");
+
+    // --- FULLSCREEN SCALING LOGIC ---
+    function scaleApp() {
+        const isFullscreen = document.fullscreenElement || document.webkitFullscreenElement;
+        
+        if (isFullscreen) {
+            // Fixed base resolution for the UI logic
+            const baseWidth = 850;
+            const baseHeight = 950;
+            
+            // Calculate the scale to fit the window exactly
+            const scale = Math.min(
+                window.innerWidth / baseWidth,
+                window.innerHeight / baseHeight
+            );
+            
+            screenElement.style.transform = `scale(${scale})`;
+            document.body.classList.add('mobile-mode');
+        } else {
+            screenElement.style.transform = 'none'; 
+            document.body.classList.remove('mobile-mode');
+        }
+    }
+
+    function goFull() {
+        const el = document.documentElement;
+        if (el.requestFullscreen) el.requestFullscreen();
+        else if (el.webkitRequestFullscreen) el.webkitRequestFullscreen();
+    }
+
+    window.addEventListener("resize", scaleApp);
+    window.addEventListener("fullscreenchange", scaleApp);
+    window.addEventListener("webkitfullscreenchange", scaleApp);
+
+    if (mobileToggleBtn) {
+        mobileToggleBtn.addEventListener('click', goFull);
+    }
+    scaleApp(); // Check initial layout state
 
     // --- Audio System Variables ---
     let audioContext;
@@ -54,7 +94,6 @@ document.addEventListener('DOMContentLoaded', () => {
     function rebuildAudioGraph() {
         if (!audioContext || audioContext.state !== 'running') return;
 
-        // Clean up old nodes
         if (activeNodes.carrierOsc) { activeNodes.carrierOsc.stop(); activeNodes.carrierOsc.disconnect(); }
         if (activeNodes.modulatorOsc1) { activeNodes.modulatorOsc1.stop(); activeNodes.modulatorOsc1.disconnect(); }
         if (activeNodes.dcOffsetNodeAM) { activeNodes.dcOffsetNodeAM.stop(); activeNodes.dcOffsetNodeAM.disconnect(); }
@@ -158,7 +197,6 @@ document.addEventListener('DOMContentLoaded', () => {
                 mainGainNode.gain.value = 0;
                 mainGainNode.connect(audioContext.destination);
                 
-                // Start background oscillators with volume at 0
                 rebuildAudioGraph();
             }
             audioContext.resume().then(() => {
@@ -215,18 +253,17 @@ document.addEventListener('DOMContentLoaded', () => {
         const visualDiv = document.getElementById('morse-visual-display');
         visualDiv.innerHTML = '';
         const wpm = parseFloat(document.getElementById('synth-wpm').value);
-        const dotMs = 1200 / wpm; // Standard formula: 1 unit = 1.2 / WPM seconds
+        const dotMs = 1200 / wpm;
         
         let chars = text.toUpperCase().split('');
         
-        // Render visual spans
         let spans = [];
         chars.forEach(char => {
             const code = MORSE_DICT[char];
             if (code) {
                 if (code === ' ') {
                     let sp = document.createElement('span');
-                    sp.textContent = '   '; // Visual word space
+                    sp.textContent = '   ';
                     visualDiv.appendChild(sp);
                     spans.push({ char, code: ' ', element: sp });
                 } else {
@@ -244,7 +281,6 @@ document.addEventListener('DOMContentLoaded', () => {
             }
         });
 
-        // Play sequence
         for (let i = 0; i < spans.length; i++) {
             if (stopRequested) break;
             const item = spans[i];
@@ -255,21 +291,20 @@ document.addEventListener('DOMContentLoaded', () => {
                 await sleep(item.code === '.' ? dotMs : dotMs * 3);
                 toneOff();
                 item.element.classList.remove('active');
-                await sleep(dotMs); // intra-character space
+                await sleep(dotMs);
             } else if (item.code === 'letter_space') {
-                await sleep(dotMs * 2); // 3 total (1 from above + 2)
+                await sleep(dotMs * 2);
             } else if (item.code === ' ') {
-                await sleep(dotMs * 6); // 7 total (1 from above + 6)
+                await sleep(dotMs * 6);
             }
         }
         
         isPlaying = false;
-        if (document.getElementById('loop-checkbox').checked && !stopRequested) {
-            playMorseSequence(text); // Loop
+        if (document.getElementById('loop-checkbox').checked && !stopRequested && document.getElementById('text-input').value.trim() !== '') {
+            playMorseSequence(document.getElementById('text-input').value); 
         }
     }
 
-    // Encoder Controls
     document.getElementById('play-btn').addEventListener('click', () => {
         playMorseSequence(document.getElementById('text-input').value);
     });
@@ -279,7 +314,14 @@ document.addEventListener('DOMContentLoaded', () => {
         toneOff();
     });
 
-    // Live Typing Setup
+    // ADDED: Clear Button logic
+    document.getElementById('clear-btn').addEventListener('click', () => {
+        stopRequested = true;
+        toneOff();
+        document.getElementById('text-input').value = '';
+        document.getElementById('morse-visual-display').innerHTML = '';
+    });
+
     document.getElementById('text-input').addEventListener('input', (e) => {
         const newChar = e.data;
         if (!isPlaying && newChar && MORSE_DICT[newChar.toUpperCase()]) {
@@ -301,7 +343,7 @@ document.addEventListener('DOMContentLoaded', () => {
     async function startDecoding() {
         try {
             micStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
-            await initAudio(); // Need context running
+            await initAudio(); 
             
             const micSource = audioContext.createMediaStreamSource(micStream);
             analyser = audioContext.createAnalyser();
@@ -331,7 +373,6 @@ document.addEventListener('DOMContentLoaded', () => {
     startMicBtn.addEventListener('click', startDecoding);
     stopMicBtn.addEventListener('click', stopDecoding);
 
-    // Decoding State Machine
     let isToneCurrentlyOn = false;
     let lastStateChangeTime = performance.now();
     let currentSymbolBuffer = "";
@@ -342,13 +383,11 @@ document.addEventListener('DOMContentLoaded', () => {
         const dataArray = new Float32Array(analyser.frequencyBinCount);
         analyser.getFloatFrequencyData(dataArray);
 
-        // Find max energy in the buffer (rough volume estimation for tone)
         let maxEnergy = -100;
         for(let i = 0; i < dataArray.length; i++) {
             if (dataArray[i] > maxEnergy) maxEnergy = dataArray[i];
         }
 
-        // Update UI meter
         const meterPercent = Math.max(0, Math.min(100, (maxEnergy + 100) * 1.5));
         signalLevel.style.width = `${meterPercent}%`;
 
@@ -361,32 +400,27 @@ document.addEventListener('DOMContentLoaded', () => {
         const duration = now - lastStateChangeTime;
 
         if (toneDetected !== isToneCurrentlyOn) {
-            // State changed
             if (!toneDetected) {
-                // Tone just ended. Was it a dot or dash?
-                if (duration > dotMs * 2) { // Allow margin of error
+                if (duration > dotMs * 2) {
                     currentSymbolBuffer += "-";
-                } else if (duration > dotMs * 0.3) { // Debounce noise
+                } else if (duration > dotMs * 0.3) {
                     currentSymbolBuffer += ".";
                 }
             }
             isToneCurrentlyOn = toneDetected;
             lastStateChangeTime = now;
         } else if (!toneDetected && currentSymbolBuffer.length > 0) {
-            // Tone is off. Check for spaces
             if (duration > dotMs * 5) {
-                // Word space
                 const char = REVERSE_MORSE[currentSymbolBuffer];
                 if (char) decodedTextDisplay.textContent += char + " ";
                 else decodedTextDisplay.textContent += "? ";
                 currentSymbolBuffer = "";
             } else if (duration > dotMs * 2.5) {
-                // Character space
                 const char = REVERSE_MORSE[currentSymbolBuffer];
                 if (char) decodedTextDisplay.textContent += char;
                 else decodedTextDisplay.textContent += "?";
                 currentSymbolBuffer = "";
-                lastStateChangeTime = now; // reset to avoid immediate word space triggers
+                lastStateChangeTime = now;
             }
         }
 

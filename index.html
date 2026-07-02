@@ -1,0 +1,89 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Super Deluxe Morse Code</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <button id="dark-mode-toggle">☀️ Light Mode</button>
+
+    <h1>📻 Super Deluxe Morse Machine</h1>
+
+    <div id="audio-status">Loading...</div>
+
+    <!-- SYNTH SETTINGS -->
+    <div class="panel settings-panel">
+        <h2>Sound Settings</h2>
+        <div class="controls-container">
+            <div class="control-group">
+                <label>Waveform</label>
+                <select id="synth-waveform">
+                    <option value="sine">Sine</option>
+                    <option value="square" selected>Square</option>
+                    <option value="sawtooth">Saw</option>
+                    <option value="triangle">Tri</option>
+                </select>
+            </div>
+            <div class="control-group">
+                <label>Frequency (<span id="freq-val">600</span> Hz)</label>
+                <input type="range" id="synth-freq" min="200" max="1200" step="10" value="600">
+            </div>
+            <div class="control-group">
+                <label>Volume</label>
+                <input type="range" id="synth-volume" min="0" max="1" step="0.01" value="0.5">
+            </div>
+            <div class="control-group">
+                <label>Speed (<span id="wpm-val">20</span> WPM)</label>
+                <input type="range" id="synth-wpm" min="5" max="50" step="1" value="20">
+            </div>
+        </div>
+    </div>
+
+    <!-- TRANSMITTER (ENCODER) -->
+    <div class="panel encoder-panel">
+        <h2>📡 Transmitter (Text to Morse)</h2>
+        <textarea id="text-input" placeholder="Type text here to send as Morse code... (Live typing supported)"></textarea>
+        
+        <div class="action-buttons">
+            <button id="play-btn">▶ Play All</button>
+            <button id="stop-btn">⏹ Stop</button>
+            <label class="loop-label">
+                <input type="checkbox" id="loop-checkbox"> Loop
+            </label>
+        </div>
+
+        <div id="morse-visual-display" class="visual-display">
+            <!-- Morse code symbols will appear here -->
+        </div>
+        <div class="instructions">You can type live, or paste text and click Play.</div>
+    </div>
+
+    <!-- RECEIVER (DECODER) -->
+    <div class="panel decoder-panel">
+        <h2>🎙️ Receiver (Mic Audio to Text)</h2>
+        <div class="action-buttons">
+            <button id="start-mic-btn">🎤 Start Listening</button>
+            <button id="stop-mic-btn" disabled>⏹ Stop Listening</button>
+        </div>
+        
+        <div class="controls-container">
+            <div class="control-group">
+                <label>Sensitivity (Threshold)</label>
+                <input type="range" id="mic-threshold" min="-100" max="-10" step="1" value="-50">
+            </div>
+            <div class="control-group">
+                <label>Incoming Signal</label>
+                <div id="signal-meter"><div id="signal-level"></div></div>
+            </div>
+        </div>
+
+        <div id="decoded-text" class="visual-display decoded-display">
+            Waiting for audio...
+        </div>
+    </div>
+
+    <script src="script.js"></script>
+</body>
+</html>

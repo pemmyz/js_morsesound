@@ -7,9 +7,20 @@ document.addEventListener('DOMContentLoaded', () => {
     // --- Audio System Variables ---
     let audioContext;
     let mainGainNode;
-    let oscillator;
+    let activeNodes = {}; // Tracks dynamic nodes for advanced waveforms
+    
     const attackTime = 0.01;
     const releaseTime = 0.01;
+
+    // --- Advanced Waveform Constants ---
+    const FM_MODULATOR_RATIO = 1.4;
+    const FM_MODULATION_INDEX_SCALE = 2.0;
+    const AM_MODULATOR_FREQ = 7;
+    const AM_MODULATION_DEPTH = 0.7;
+    const RING_MOD_RATIO = 0.78;
+    const PWM_REAL_COEFFS = new Float32Array([0, 0.8, 0.8, 0.4, 0, -0.4, -0.8, -0.8]);
+    const PWM_IMAG_COEFFS = new Float32Array(PWM_REAL_COEFFS.length).fill(0);
+    let pwmPeriodicWave = null;
 
     // --- State ---
     let isPlaying = false;
@@ -39,7 +50,105 @@ document.addEventListener('DOMContentLoaded', () => {
     }
     darkModeToggle.addEventListener('click', () => setDarkMode(body.classList.contains('light-mode')));
 
-    // --- Web Audio Synthesizer Init ---
+    // --- Web Audio Synthesizer Graph ---
+    function rebuildAudioGraph() {
+        if (!audioContext || audioContext.state !== 'running') return;
+
+        // Clean up old nodes
+        if (activeNodes.carrierOsc) { activeNodes.carrierOsc.stop(); activeNodes.carrierOsc.disconnect(); }
+        if (activeNodes.modulatorOsc1) { activeNodes.modulatorOsc1.stop(); activeNodes.modulatorOsc1.disconnect(); }
+        if (activeNodes.dcOffsetNodeAM) { activeNodes.dcOffsetNodeAM.stop(); activeNodes.dcOffsetNodeAM.disconnect(); }
+        activeNodes = {};
+
+        const type = document.getElementById('synth-waveform').value;
+        const freq = parseFloat(document.getElementById('synth-freq').value);
+        const now = audioContext.currentTime;
+
+        activeNodes.carrierOsc = audioContext.createOscillator();
+        activeNodes.carrierOsc.frequency.setValueAtTime(freq, now);
+
+        if (!pwmPeriodicWave && type === 'pwm') {
+            pwmPeriodicWave = audioContext.createPeriodicWave(PWM_REAL_COEFFS, PWM_IMAG_COEFFS, { disableNormalization: false });
+        }
+
+        switch (type) {
+            case 'sine': case 'square': case 'sawtooth': case 'triangle':
+                activeNodes.carrierOsc.type = type;
+                activeNodes.carrierOsc.connect(mainGainNode);
+                break;
+            case 'pwm':
+                activeNodes.carrierOsc.setPeriodicWave(pwmPeriodicWave);
+                activeNodes.carrierOsc.connect(mainGainNode);
+                break;
+            case 'fm':
+                activeNodes.carrierOsc.type = 'sine';
+                activeNodes.modulatorOsc1 = audioContext.createOscillator();
+                activeNodes.modulatorOsc1.type = 'sine';
+                activeNodes.modulatorOsc1.frequency.setValueAtTime(freq * FM_MODULATOR_RATIO, now);
+                activeNodes.modGain1 = audioContext.createGain();
+                activeNodes.modGain1.gain.setValueAtTime(freq * FM_MODULATION_INDEX_SCALE, now);
+
+                activeNodes.modulatorOsc1.connect(activeNodes.modGain1);
+                activeNodes.modGain1.connect(activeNodes.carrierOsc.frequency);
+                activeNodes.carrierOsc.connect(mainGainNode);
+                activeNodes.modulatorOsc1.start();
+                break;
+            case 'am':
+                activeNodes.carrierOsc.type = 'sine';
+                activeNodes.modulatorOsc1 = audioContext.createOscillator();
+                activeNodes.modulatorOsc1.type = 'sine';
+                activeNodes.modulatorOsc1.frequency.setValueAtTime(AM_MODULATOR_FREQ, now);
+
+                activeNodes.dcOffsetNodeAM = audioContext.createConstantSource();
+                activeNodes.dcOffsetNodeAM.offset.value = 1.0 - (AM_MODULATION_DEPTH / 2);
+
+                activeNodes.modulatorScaleGainAM = audioContext.createGain();
+                activeNodes.modulatorScaleGainAM.gain.value = AM_MODULATION_DEPTH / 2;
+
+                activeNodes.modGain1 = audioContext.createGain();
+
+                activeNodes.modulatorOsc1.connect(activeNodes.modulatorScaleGainAM);
+                activeNodes.dcOffsetNodeAM.connect(activeNodes.modGain1.gain);
+                activeNodes.modulatorScaleGainAM.connect(activeNodes.modGain1.gain);
+                activeNodes.carrierOsc.connect(activeNodes.modGain1);
+                activeNodes.modGain1.connect(mainGainNode);
+
+                activeNodes.modulatorOsc1.start();
+                activeNodes.dcOffsetNodeAM.start();
+                break;
+            case 'ring':
+                activeNodes.carrierOsc.type = 'sine';
+                activeNodes.modulatorOsc1 = audioContext.createOscillator();
+                activeNodes.modulatorOsc1.type = 'sine';
+                activeNodes.modulatorOsc1.frequency.setValueAtTime(freq * RING_MOD_RATIO, now);
+
+                activeNodes.modGain1 = audioContext.createGain();
+
+                activeNodes.modulatorOsc1.connect(activeNodes.modGain1.gain);
+                activeNodes.carrierOsc.connect(activeNodes.modGain1);
+                activeNodes.modGain1.connect(mainGainNode);
+                activeNodes.modulatorOsc1.start();
+                break;
+        }
+
+        activeNodes.carrierOsc.start();
+    }
+
+    function updateFrequency(freq) {
+        if (!activeNodes.carrierOsc) return;
+        const now = audioContext.currentTime;
+        const type = document.getElementById('synth-waveform').value;
+
+        activeNodes.carrierOsc.frequency.setValueAtTime(freq, now);
+
+        if (type === 'fm' && activeNodes.modulatorOsc1 && activeNodes.modGain1) {
+            activeNodes.modulatorOsc1.frequency.setValueAtTime(freq * FM_MODULATOR_RATIO, now);
+            activeNodes.modGain1.gain.setValueAtTime(freq * FM_MODULATION_INDEX_SCALE, now);
+        } else if (type === 'ring' && activeNodes.modulatorOsc1) {
+            activeNodes.modulatorOsc1.frequency.setValueAtTime(freq * RING_MOD_RATIO, now);
+        }
+    }
+
     function initAudio() {
         if (audioContext && audioContext.state === 'running') return Promise.resolve();
         return new Promise((resolve) => {
@@ -49,11 +158,8 @@ document.addEventListener('DOMContentLoaded', () => {
                 mainGainNode.gain.value = 0;
                 mainGainNode.connect(audioContext.destination);
                 
-                oscillator = audioContext.createOscillator();
-                oscillator.type = document.getElementById('synth-waveform').value;
-                oscillator.frequency.value = parseFloat(document.getElementById('synth-freq').value);
-                oscillator.connect(mainGainNode);
-                oscillator.start();
+                // Start background oscillators with volume at 0
+                rebuildAudioGraph();
             }
             audioContext.resume().then(() => {
                 statusDiv.textContent = "Audio Ready";
@@ -83,14 +189,16 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     // --- Settings Listeners ---
-    document.getElementById('synth-waveform').addEventListener('change', (e) => {
-        if (oscillator) oscillator.type = e.target.value;
+    document.getElementById('synth-waveform').addEventListener('change', () => {
+        rebuildAudioGraph();
     });
+
     document.getElementById('synth-freq').addEventListener('input', (e) => {
-        const val = e.target.value;
+        const val = parseFloat(e.target.value);
         document.getElementById('freq-val').textContent = val;
-        if (oscillator) oscillator.frequency.value = val;
+        updateFrequency(val);
     });
+
     document.getElementById('synth-wpm').addEventListener('input', (e) => {
         document.getElementById('wpm-val').textContent = e.target.value;
     });

@@ -11,11 +11,9 @@ document.addEventListener('DOMContentLoaded', () => {
         const isFullscreen = document.fullscreenElement || document.webkitFullscreenElement;
         
         if (isFullscreen) {
-            // Fixed base resolution for the UI logic
             const baseWidth = 850;
             const baseHeight = 950;
             
-            // Calculate the scale to fit the window exactly
             const scale = Math.min(
                 window.innerWidth / baseWidth,
                 window.innerHeight / baseHeight
@@ -42,12 +40,12 @@ document.addEventListener('DOMContentLoaded', () => {
     if (mobileToggleBtn) {
         mobileToggleBtn.addEventListener('click', goFull);
     }
-    scaleApp(); // Check initial layout state
+    scaleApp(); 
 
     // --- Audio System Variables ---
     let audioContext;
     let mainGainNode;
-    let activeNodes = {}; // Tracks dynamic nodes for advanced waveforms
+    let activeNodes = {}; 
     
     const attackTime = 0.01;
     const releaseTime = 0.01;
@@ -314,7 +312,6 @@ document.addEventListener('DOMContentLoaded', () => {
         toneOff();
     });
 
-    // ADDED: Clear Button logic
     document.getElementById('clear-btn').addEventListener('click', () => {
         stopRequested = true;
         toneOff();
@@ -329,7 +326,7 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     });
 
-    // --- Decoder Logic (Mic Audio to Text) ---
+    // --- Decoder Logic (Mic Audio to Text) with ADAPTIVE TRACKING ---
     let micStream;
     let analyser;
     let decodeAnimationFrame;
@@ -338,7 +335,18 @@ document.addEventListener('DOMContentLoaded', () => {
     const startMicBtn = document.getElementById('start-mic-btn');
     const stopMicBtn = document.getElementById('stop-mic-btn');
     const signalLevel = document.getElementById('signal-level');
+    
+    // UI Elements for decoder
+    const estimatedWpmDisplay = document.getElementById('estimated-wpm');
+    const rawSymbolsDisplay = document.getElementById('raw-symbols-display');
     const decodedTextDisplay = document.getElementById('decoded-text');
+
+    // Adaptive Tracking Variables
+    let isToneCurrentlyOn = false;
+    let lastStateChangeTime = 0;
+    let currentSymbolBuffer = "";
+    let adaptiveDotMs = 60; // Represents internal memory for 1 'unit' of time
+    let wordSpaceAdded = true; 
 
     async function startDecoding() {
         try {
@@ -353,7 +361,19 @@ document.addEventListener('DOMContentLoaded', () => {
             decodingActive = true;
             startMicBtn.disabled = true;
             stopMicBtn.disabled = false;
+            
+            // Reset state
             decodedTextDisplay.textContent = "";
+            rawSymbolsDisplay.textContent = "";
+            currentSymbolBuffer = "";
+            wordSpaceAdded = true;
+            
+            // Initial guess based on UI setting, serves as the starting baseline
+            const startWpm = parseFloat(document.getElementById('synth-wpm').value);
+            adaptiveDotMs = 1200 / startWpm; 
+            estimatedWpmDisplay.textContent = `Estimated Speed: ~${Math.round(startWpm)} WPM (Listening...)`;
+            
+            lastStateChangeTime = performance.now();
             analyzeIncomingSignal();
         } catch (err) {
             alert("Microphone access denied or error occurred.");
@@ -368,15 +388,13 @@ document.addEventListener('DOMContentLoaded', () => {
         startMicBtn.disabled = false;
         stopMicBtn.disabled = true;
         signalLevel.style.width = '0%';
+        estimatedWpmDisplay.textContent = "Estimated Speed: Stopped.";
     }
 
     startMicBtn.addEventListener('click', startDecoding);
     stopMicBtn.addEventListener('click', stopDecoding);
 
-    let isToneCurrentlyOn = false;
-    let lastStateChangeTime = performance.now();
-    let currentSymbolBuffer = "";
-    
+    // The core function continuously observing pulses and adjusting WPM expectations
     function analyzeIncomingSignal() {
         if (!decodingActive) return;
 
@@ -388,39 +406,73 @@ document.addEventListener('DOMContentLoaded', () => {
             if (dataArray[i] > maxEnergy) maxEnergy = dataArray[i];
         }
 
+        // Display Signal Level
         const meterPercent = Math.max(0, Math.min(100, (maxEnergy + 100) * 1.5));
         signalLevel.style.width = `${meterPercent}%`;
 
         const threshold = parseFloat(document.getElementById('mic-threshold').value);
-        const wpm = parseFloat(document.getElementById('synth-wpm').value);
-        const dotMs = 1200 / wpm;
-
         const toneDetected = maxEnergy > threshold;
         const now = performance.now();
         const duration = now - lastStateChangeTime;
 
         if (toneDetected !== isToneCurrentlyOn) {
+            // STATE HAS CHANGED
             if (!toneDetected) {
-                if (duration > dotMs * 2) {
-                    currentSymbolBuffer += "-";
-                } else if (duration > dotMs * 0.3) {
-                    currentSymbolBuffer += ".";
+                // Tone just ended, measure length of the pulse
+                if (duration > 20) { // Reject very tiny mic static anomalies
+                    let symbolDetected;
+                    
+                    if (duration < adaptiveDotMs * 1.8) {
+                        // It's a DOT. Update internal memory using Exponential Moving Average
+                        adaptiveDotMs = (adaptiveDotMs * 0.7) + (duration * 0.3);
+                        symbolDetected = ".";
+                    } else {
+                        // It's a DASH. A dash is roughly 3 dots long. Update internal memory using a third of its length
+                        adaptiveDotMs = (adaptiveDotMs * 0.7) + ((duration / 3) * 0.3);
+                        symbolDetected = "-";
+                    }
+
+                    // Keep memory within sane limits (Between approx 5 WPM and 60 WPM)
+                    adaptiveDotMs = Math.max(20, Math.min(240, adaptiveDotMs));
+
+                    // Output estimates
+                    const currentWpm = Math.round(1200 / adaptiveDotMs);
+                    estimatedWpmDisplay.textContent = `Estimated Speed: ~${currentWpm} WPM`;
+
+                    // Process Symbol
+                    currentSymbolBuffer += symbolDetected;
+                    rawSymbolsDisplay.textContent += symbolDetected;
+                    
+                    // Auto-scroll to bottom of raw symbols window
+                    rawSymbolsDisplay.scrollTop = rawSymbolsDisplay.scrollHeight;
                 }
-            }
+            } 
+            // Save state
             isToneCurrentlyOn = toneDetected;
             lastStateChangeTime = now;
         } else if (!toneDetected && currentSymbolBuffer.length > 0) {
-            if (duration > dotMs * 5) {
+            // WE ARE IN A SILENCE PAUSE - See if it's long enough to identify as letter completion
+            if (duration > adaptiveDotMs * 2.5) {
                 const char = REVERSE_MORSE[currentSymbolBuffer];
-                if (char) decodedTextDisplay.textContent += char + " ";
-                else decodedTextDisplay.textContent += "? ";
-                currentSymbolBuffer = "";
-            } else if (duration > dotMs * 2.5) {
-                const char = REVERSE_MORSE[currentSymbolBuffer];
+                
                 if (char) decodedTextDisplay.textContent += char;
                 else decodedTextDisplay.textContent += "?";
+                
+                // Keep scroll at bottom
+                decodedTextDisplay.scrollTop = decodedTextDisplay.scrollHeight;
+                
                 currentSymbolBuffer = "";
-                lastStateChangeTime = now;
+                wordSpaceAdded = false;
+
+                // Put a visual gap in the raw pulse display
+                rawSymbolsDisplay.textContent += " ";
+            }
+        } else if (!toneDetected && currentSymbolBuffer.length === 0 && !wordSpaceAdded) {
+            // WE ARE IN A LONG SILENCE PAUSE - See if it's an inter-word gap
+            if (duration > adaptiveDotMs * 5.5) {
+                decodedTextDisplay.textContent += " ";
+                rawSymbolsDisplay.textContent += " / "; // Use slash to denote word separation in raw
+                wordSpaceAdded = true;
             }
         }
 

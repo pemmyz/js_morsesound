@@ -74,9 +74,14 @@ body.mobile-mode #app-screen {
     border-radius: 5px;
     font-size: 14px;
 }
-body.light-mode #mobile-btn, body.light-mode #dark-mode-toggle {
-    background: #ddd; color: #000; border: 1px solid #bbb;
+
+body.light-mode #mobile-btn, 
+body.light-mode #dark-mode-toggle {
+    background: #ddd; 
+    color: #000; 
+    border: 1px solid #bbb;
 }
+
 #mobile-btn { left: 10px; }
 #dark-mode-toggle { right: 10px; }
 
@@ -206,12 +211,56 @@ body.light-mode .visual-display { background: #eee; border-color: #ccc; color: #
 .visual-display span.active { color: #fff; background: #ffaa00; border-radius: 2px; }
 body.light-mode .visual-display span.active { color: #fff; background: #dd6600; }
 
-.decoded-display { color: #66aaff; font-size: 1.5em; letter-spacing: normal; }
-body.light-mode .decoded-display { color: #0055cc; }
+/* --- NEW / UPDATED DECODER DISPLAYS --- */
+.decoder-label {
+    display: block;
+    font-size: 0.9em;
+    font-weight: bold;
+    margin-top: 15px;
+    margin-bottom: 5px;
+    text-align: left;
+    width: 100%;
+}
+
+.wpm-display {
+    text-align: center;
+    font-weight: bold;
+    color: #33dd33;
+    background: rgba(51, 221, 51, 0.1);
+    padding: 8px;
+    border-radius: 5px;
+    margin-top: 10px;
+}
+body.light-mode .wpm-display {
+    color: #1a881a;
+    background: rgba(26, 136, 26, 0.1);
+}
+
+.raw-display {
+    min-height: 50px;
+    font-size: 1.5em;
+    color: #aaa;
+    white-space: pre-wrap; /* allow wrapping for dots and spaces */
+    letter-spacing: 3px;
+}
+body.light-mode .raw-display {
+    color: #555;
+}
+
+.decoded-display {
+    min-height: 80px;
+    color: #66aaff; 
+    font-size: 1.8em; 
+    letter-spacing: normal; 
+}
+body.light-mode .decoded-display { 
+    color: #0055cc; 
+}
 
 .instructions { font-size: 0.8em; color: #aaa; margin-top: 10px; text-align: center; }
 body.light-mode .instructions { color: #555; }
 
+/* --- SIGNAL METER --- */
 #signal-meter {
     width: 150px;
     height: 15px;

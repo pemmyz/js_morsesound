@@ -46,7 +46,7 @@
                         <input type="range" id="synth-volume" min="0" max="1" step="0.01" value="0.5">
                     </div>
                     <div class="control-group">
-                        <label>Speed (<span id="wpm-val">20</span> WPM)</label>
+                        <label>Transmitter Speed (<span id="wpm-val">20</span> WPM)</label>
                         <input type="range" id="synth-wpm" min="5" max="50" step="1" value="20">
                     </div>
                 </div>
@@ -57,7 +57,6 @@
                 <h2>📡 Transmitter (Text to Morse)</h2>
                 <textarea id="text-input" placeholder="Type text here to send as Morse code... (Live typing supported)"></textarea>
                 
-                <!-- ADDED CLEAR BUTTON HERE -->
                 <div class="action-buttons">
                     <button id="play-btn">▶ Play All</button>
                     <button id="stop-btn">⏹ Stop</button>
@@ -92,6 +91,17 @@
                     </div>
                 </div>
 
+                <!-- ADAPTIVE TRACKING DISPLAY -->
+                <div id="estimated-wpm" class="wpm-display">
+                    Estimated Speed: Waiting for signal...
+                </div>
+
+                <label class="decoder-label">Raw Pulses (Dots & Dashes)</label>
+                <div id="raw-symbols-display" class="visual-display raw-display">
+                    ...
+                </div>
+
+                <label class="decoder-label">Decoded Text</label>
                 <div id="decoded-text" class="visual-display decoded-display">
                     Waiting for audio...
                 </div>

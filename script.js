@@ -27,6 +27,7 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
+    // Requests full screen
     function goFull() {
         const el = document.documentElement;
         if (el.requestFullscreen) el.requestFullscreen();
@@ -60,6 +61,7 @@ document.addEventListener('DOMContentLoaded', () => {
     // --- State ---
     let isPlaying = false;
     let stopRequested = false;
+    let schedulerInterval = null;
 
     // --- Morse Code Dictionary ---
     const MORSE_DICT = {
@@ -96,9 +98,9 @@ document.addEventListener('DOMContentLoaded', () => {
         const voiceGain = audioContext.createGain();
         voiceGain.connect(audioContext.destination);
 
-        // Scale attack & release dynamically to avoid pops on short dot durations
-        const att = Math.min(0.01, duration * 0.3);
-        const rel = Math.min(0.01, duration * 0.3);
+        // Dynamic attack/release scaling
+        const att = Math.min(0.003, duration * 0.08); // Snappy 3ms attack
+        const rel = Math.min(0.005, duration * 0.12); // Snappy 5ms release
 
         voiceGain.gain.setValueAtTime(0, startTime);
         voiceGain.gain.linearRampToValueAtTime(vol, startTime + att);
@@ -184,7 +186,7 @@ document.addEventListener('DOMContentLoaded', () => {
         carrierOsc.start(startTime);
         carrierOsc.stop(startTime + duration);
 
-        // Safe disposal when the sound ends to prevent memory leakage
+        // Safe cleanup when notes finish playing
         carrierOsc.onended = () => {
             try {
                 carrierOsc.disconnect();
@@ -255,7 +257,7 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
-    // Initialize Audio on any click
+    // Resume Audio Context on initial user interaction
     document.body.addEventListener('click', () => {
         if (!audioContext || audioContext.state !== 'running') initAudio();
     }, { once: true });
@@ -271,7 +273,7 @@ document.addEventListener('DOMContentLoaded', () => {
         document.getElementById('wpm-val').textContent = e.target.value;
     });
 
-    // --- Encoder Logic (Text to Morse) with Audio Thread Scheduling ---
+    // --- Encoder Logic (Text to Sound) with Lookahead Scheduler ---
     async function playMorseSequence(text) {
         if (isPlaying) return;
         isPlaying = true;
@@ -286,7 +288,7 @@ document.addEventListener('DOMContentLoaded', () => {
         
         let chars = text.toUpperCase().split('');
         let timeline = [];
-        let currentTimeOffset = 0.05; // Short latency buffer for thread stability
+        let currentTimeOffset = 0.05; // Timing safe offset
 
         chars.forEach(char => {
             const code = MORSE_DICT[char];
@@ -294,7 +296,9 @@ document.addEventListener('DOMContentLoaded', () => {
                 if (code === ' ') {
                     currentTimeOffset += dotSec * 4;
                     let sp = document.createElement('span');
-                    sp.textContent = '   ';
+                    // Use CSS layout dimensions instead of literal spaces to avoid missing glyph square boxes
+                    sp.style.display = 'inline-block';
+                    sp.style.width = '1.5ch'; 
                     visualDiv.appendChild(sp);
                     timeline.push({ type: 'space', element: sp, time: currentTimeOffset });
                 } else {
@@ -316,52 +320,81 @@ document.addEventListener('DOMContentLoaded', () => {
                     }
                     currentTimeOffset += dotSec * 2;
                     let letterSpace = document.createElement('span');
-                    letterSpace.textContent = ' ';
+                    // Use CSS layout dimensions instead of literal spaces to avoid missing glyph square boxes
+                    letterSpace.style.display = 'inline-block';
+                    letterSpace.style.width = '0.5ch';
                     visualDiv.appendChild(letterSpace);
                     timeline.push({ type: 'letter_space', element: letterSpace, time: currentTimeOffset });
                 }
             }
         });
 
+        const totalDurationSec = currentTimeOffset;
         const startTime = audioContext.currentTime;
+        let nextNoteIndex = 0;
 
-        // Schedule all sounds natively onto the high-priority Web Audio timeline
-        timeline.forEach(item => {
-            if (item.type === 'sound') {
-                const voice = createVoice(startTime + item.time, item.duration);
-                if (voice) {
-                    activeVoices.push(voice);
+        // Lookahead timing settings
+        const lookahead = 0.1; // 100ms
+        
+        function schedulerTick() {
+            if (stopRequested) {
+                clearInterval(schedulerInterval);
+                return;
+            }
+
+            const contextTime = audioContext.currentTime;
+
+            while (nextNoteIndex < timeline.length) {
+                const note = timeline[nextNoteIndex];
+                const absoluteTime = startTime + note.time;
+
+                if (absoluteTime < contextTime + lookahead) {
+                    // Schedule Audio play event
+                    if (note.type === 'sound') {
+                        const voice = createVoice(absoluteTime, note.duration);
+                        if (voice) {
+                            activeVoices.push(voice);
+                        }
+                    }
+
+                    // Schedule Visual highlight timing
+                    const delayMs = (absoluteTime - contextTime) * 1000;
+
+                    let tOn = setTimeout(() => {
+                        note.element.classList.add('active');
+                    }, Math.max(0, delayMs));
+
+                    let tOff = setTimeout(() => {
+                        note.element.classList.remove('active');
+                    }, Math.max(0, delayMs + (note.duration * 1000)));
+
+                    activeTimeouts.push(tOn, tOff);
+                    nextNoteIndex++;
+                } else {
+                    break;
                 }
             }
-        });
 
-        // Handle visual DOM updates using loose timeouts (visual delay will not disrupt audio)
-        timeline.forEach(item => {
-            if (item.type === 'sound') {
-                let tOn = setTimeout(() => {
-                    item.element.classList.add('active');
-                }, item.time * 1000);
+            if (nextNoteIndex >= timeline.length) {
+                clearInterval(schedulerInterval);
+                
+                // Done timing callback
+                const remainingTimeMs = ((startTime + totalDurationSec) - audioContext.currentTime) * 1000;
+                let doneTimeout = setTimeout(() => {
+                    isPlaying = false;
+                    activeVoices = [];
+                    
+                    if (document.getElementById('loop-checkbox').checked && !stopRequested && document.getElementById('text-input').value.trim() !== '') {
+                        playMorseSequence(document.getElementById('text-input').value); 
+                    }
+                }, Math.max(0, remainingTimeMs + 50));
 
-                let tOff = setTimeout(() => {
-                    item.element.classList.remove('active');
-                }, (item.time + item.duration) * 1000);
-
-                activeTimeouts.push(tOn, tOff);
+                activeTimeouts.push(doneTimeout);
             }
-        });
+        }
 
-        // Set sequence completed callback
-        const totalDurationSec = currentTimeOffset;
-        let doneTimeout = setTimeout(() => {
-            isPlaying = false;
-            activeVoices = [];
-            
-            if (document.getElementById('loop-checkbox').checked && !stopRequested && document.getElementById('text-input').value.trim() !== '') {
-                playMorseSequence(document.getElementById('text-input').value); 
-            }
-        }, totalDurationSec * 1000);
-
-        activeTimeouts.push(doneTimeout);
+        // Run scheduler loop every 25ms
+        schedulerInterval = setInterval(schedulerTick, 25);
     }
 
     document.getElementById('play-btn').addEventListener('click', () => {
@@ -371,6 +404,7 @@ document.addEventListener('DOMContentLoaded', () => {
     document.getElementById('stop-btn').addEventListener('click', () => {
         stopRequested = true;
         isPlaying = false;
+        if (schedulerInterval) clearInterval(schedulerInterval);
         stopAllVoices();
         clearAllTimeouts();
     });
@@ -378,6 +412,7 @@ document.addEventListener('DOMContentLoaded', () => {
     document.getElementById('clear-btn').addEventListener('click', () => {
         stopRequested = true;
         isPlaying = false;
+        if (schedulerInterval) clearInterval(schedulerInterval);
         stopAllVoices();
         clearAllTimeouts();
         document.getElementById('text-input').value = '';

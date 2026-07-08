@@ -6,6 +6,8 @@
 A browser-based Morse code encoder and decoder built with vanilla HTML,
 CSS, and JavaScript.
 
+## Play it now: https://pemmyz.github.io/js_morsesound/
+
 ## Features
 
 -   **Text → Morse transmitter**

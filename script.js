@@ -44,11 +44,9 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // --- Audio System Variables ---
     let audioContext;
-    let mainGainNode;
-    let activeNodes = {}; 
-    
-    const attackTime = 0.01;
-    const releaseTime = 0.01;
+    let activeVoices = [];
+    let activeTimeouts = [];
+    let pwmPeriodicWave = null;
 
     // --- Advanced Waveform Constants ---
     const FM_MODULATOR_RATIO = 1.4;
@@ -58,7 +56,6 @@ document.addEventListener('DOMContentLoaded', () => {
     const RING_MOD_RATIO = 0.78;
     const PWM_REAL_COEFFS = new Float32Array([0, 0.8, 0.8, 0.4, 0, -0.4, -0.8, -0.8]);
     const PWM_IMAG_COEFFS = new Float32Array(PWM_REAL_COEFFS.length).fill(0);
-    let pwmPeriodicWave = null;
 
     // --- State ---
     let isPlaying = false;
@@ -88,21 +85,33 @@ document.addEventListener('DOMContentLoaded', () => {
     }
     darkModeToggle.addEventListener('click', () => setDarkMode(body.classList.contains('light-mode')));
 
-    // --- Web Audio Synthesizer Graph ---
-    function rebuildAudioGraph() {
-        if (!audioContext || audioContext.state !== 'running') return;
-
-        if (activeNodes.carrierOsc) { activeNodes.carrierOsc.stop(); activeNodes.carrierOsc.disconnect(); }
-        if (activeNodes.modulatorOsc1) { activeNodes.modulatorOsc1.stop(); activeNodes.modulatorOsc1.disconnect(); }
-        if (activeNodes.dcOffsetNodeAM) { activeNodes.dcOffsetNodeAM.stop(); activeNodes.dcOffsetNodeAM.disconnect(); }
-        activeNodes = {};
+    // --- Web Audio Synthesizer Graph (Stateless Voice Architecture) ---
+    function createVoice(startTime, duration) {
+        if (!audioContext || audioContext.state !== 'running') return null;
 
         const type = document.getElementById('synth-waveform').value;
         const freq = parseFloat(document.getElementById('synth-freq').value);
-        const now = audioContext.currentTime;
+        const vol = parseFloat(document.getElementById('synth-volume').value);
 
-        activeNodes.carrierOsc = audioContext.createOscillator();
-        activeNodes.carrierOsc.frequency.setValueAtTime(freq, now);
+        const voiceGain = audioContext.createGain();
+        voiceGain.connect(audioContext.destination);
+
+        // Scale attack & release dynamically to avoid pops on short dot durations
+        const att = Math.min(0.01, duration * 0.3);
+        const rel = Math.min(0.01, duration * 0.3);
+
+        voiceGain.gain.setValueAtTime(0, startTime);
+        voiceGain.gain.linearRampToValueAtTime(vol, startTime + att);
+        voiceGain.gain.setValueAtTime(vol, startTime + duration - rel);
+        voiceGain.gain.linearRampToValueAtTime(0, startTime + duration);
+
+        const carrierOsc = audioContext.createOscillator();
+        carrierOsc.frequency.setValueAtTime(freq, startTime);
+
+        let modulatorOsc = null;
+        let dcOffsetNodeAM = null;
+        let modulatorScaleGainAM = null;
+        let modGain = null;
 
         if (!pwmPeriodicWave && type === 'pwm') {
             pwmPeriodicWave = audioContext.createPeriodicWave(PWM_REAL_COEFFS, PWM_IMAG_COEFFS, { disableNormalization: false });
@@ -110,80 +119,126 @@ document.addEventListener('DOMContentLoaded', () => {
 
         switch (type) {
             case 'sine': case 'square': case 'sawtooth': case 'triangle':
-                activeNodes.carrierOsc.type = type;
-                activeNodes.carrierOsc.connect(mainGainNode);
+                carrierOsc.type = type;
+                carrierOsc.connect(voiceGain);
                 break;
             case 'pwm':
-                activeNodes.carrierOsc.setPeriodicWave(pwmPeriodicWave);
-                activeNodes.carrierOsc.connect(mainGainNode);
+                carrierOsc.setPeriodicWave(pwmPeriodicWave);
+                carrierOsc.connect(voiceGain);
                 break;
             case 'fm':
-                activeNodes.carrierOsc.type = 'sine';
-                activeNodes.modulatorOsc1 = audioContext.createOscillator();
-                activeNodes.modulatorOsc1.type = 'sine';
-                activeNodes.modulatorOsc1.frequency.setValueAtTime(freq * FM_MODULATOR_RATIO, now);
-                activeNodes.modGain1 = audioContext.createGain();
-                activeNodes.modGain1.gain.setValueAtTime(freq * FM_MODULATION_INDEX_SCALE, now);
+                carrierOsc.type = 'sine';
+                modulatorOsc = audioContext.createOscillator();
+                modulatorOsc.type = 'sine';
+                modulatorOsc.frequency.setValueAtTime(freq * FM_MODULATOR_RATIO, startTime);
+                modGain = audioContext.createGain();
+                modGain.gain.setValueAtTime(freq * FM_MODULATION_INDEX_SCALE, startTime);
 
-                activeNodes.modulatorOsc1.connect(activeNodes.modGain1);
-                activeNodes.modGain1.connect(activeNodes.carrierOsc.frequency);
-                activeNodes.carrierOsc.connect(mainGainNode);
-                activeNodes.modulatorOsc1.start();
+                modulatorOsc.connect(modGain);
+                modGain.connect(carrierOsc.frequency);
+                carrierOsc.connect(voiceGain);
+                modulatorOsc.start(startTime);
+                modulatorOsc.stop(startTime + duration);
                 break;
             case 'am':
-                activeNodes.carrierOsc.type = 'sine';
-                activeNodes.modulatorOsc1 = audioContext.createOscillator();
-                activeNodes.modulatorOsc1.type = 'sine';
-                activeNodes.modulatorOsc1.frequency.setValueAtTime(AM_MODULATOR_FREQ, now);
+                carrierOsc.type = 'sine';
+                modulatorOsc = audioContext.createOscillator();
+                modulatorOsc.type = 'sine';
+                modulatorOsc.frequency.setValueAtTime(AM_MODULATOR_FREQ, startTime);
 
-                activeNodes.dcOffsetNodeAM = audioContext.createConstantSource();
-                activeNodes.dcOffsetNodeAM.offset.value = 1.0 - (AM_MODULATION_DEPTH / 2);
+                dcOffsetNodeAM = audioContext.createConstantSource();
+                dcOffsetNodeAM.offset.setValueAtTime(1.0 - (AM_MODULATION_DEPTH / 2), startTime);
 
-                activeNodes.modulatorScaleGainAM = audioContext.createGain();
-                activeNodes.modulatorScaleGainAM.gain.value = AM_MODULATION_DEPTH / 2;
+                modulatorScaleGainAM = audioContext.createGain();
+                modulatorScaleGainAM.gain.setValueAtTime(AM_MODULATION_DEPTH / 2, startTime);
 
-                activeNodes.modGain1 = audioContext.createGain();
+                modGain = audioContext.createGain();
 
-                activeNodes.modulatorOsc1.connect(activeNodes.modulatorScaleGainAM);
-                activeNodes.dcOffsetNodeAM.connect(activeNodes.modGain1.gain);
-                activeNodes.modulatorScaleGainAM.connect(activeNodes.modGain1.gain);
-                activeNodes.carrierOsc.connect(activeNodes.modGain1);
-                activeNodes.modGain1.connect(mainGainNode);
+                modulatorOsc.connect(modulatorScaleGainAM);
+                dcOffsetNodeAM.connect(modGain.gain);
+                modulatorScaleGainAM.connect(modGain.gain);
+                carrierOsc.connect(modGain);
+                modGain.connect(voiceGain);
 
-                activeNodes.modulatorOsc1.start();
-                activeNodes.dcOffsetNodeAM.start();
+                modulatorOsc.start(startTime);
+                modulatorOsc.stop(startTime + duration);
+                dcOffsetNodeAM.start(startTime);
+                dcOffsetNodeAM.stop(startTime + duration);
                 break;
             case 'ring':
-                activeNodes.carrierOsc.type = 'sine';
-                activeNodes.modulatorOsc1 = audioContext.createOscillator();
-                activeNodes.modulatorOsc1.type = 'sine';
-                activeNodes.modulatorOsc1.frequency.setValueAtTime(freq * RING_MOD_RATIO, now);
+                carrierOsc.type = 'sine';
+                modulatorOsc = audioContext.createOscillator();
+                modulatorOsc.type = 'sine';
+                modulatorOsc.frequency.setValueAtTime(freq * RING_MOD_RATIO, startTime);
 
-                activeNodes.modGain1 = audioContext.createGain();
+                modGain = audioContext.createGain();
 
-                activeNodes.modulatorOsc1.connect(activeNodes.modGain1.gain);
-                activeNodes.carrierOsc.connect(activeNodes.modGain1);
-                activeNodes.modGain1.connect(mainGainNode);
-                activeNodes.modulatorOsc1.start();
+                modulatorOsc.connect(modGain.gain);
+                carrierOsc.connect(modGain);
+                modGain.connect(voiceGain);
+                modulatorOsc.start(startTime);
+                modulatorOsc.stop(startTime + duration);
                 break;
         }
 
-        activeNodes.carrierOsc.start();
+        carrierOsc.start(startTime);
+        carrierOsc.stop(startTime + duration);
+
+        // Safe disposal when the sound ends to prevent memory leakage
+        carrierOsc.onended = () => {
+            try {
+                carrierOsc.disconnect();
+                voiceGain.disconnect();
+                if (modulatorOsc) modulatorOsc.disconnect();
+                if (dcOffsetNodeAM) dcOffsetNodeAM.disconnect();
+                if (modulatorScaleGainAM) modulatorScaleGainAM.disconnect();
+                if (modGain) modGain.disconnect();
+            } catch(e){}
+        };
+
+        const voiceObj = {
+            carrier: carrierOsc,
+            modulator: modulatorOsc,
+            type: type,
+            stop: () => {
+                try { carrierOsc.stop(); } catch(e){}
+                if (modulatorOsc) { try { modulatorOsc.stop(); } catch(e){} }
+                if (dcOffsetNodeAM) { try { dcOffsetNodeAM.stop(); } catch(e){} }
+            }
+        };
+
+        return voiceObj;
     }
 
     function updateFrequency(freq) {
-        if (!activeNodes.carrierOsc) return;
+        if (!audioContext) return;
         const now = audioContext.currentTime;
-        const type = document.getElementById('synth-waveform').value;
+        activeVoices.forEach(voice => {
+            if (voice && voice.carrier) {
+                try {
+                    voice.carrier.frequency.setValueAtTime(freq, now);
+                    if (voice.type === 'fm' && voice.modulator) {
+                        voice.modulator.frequency.setValueAtTime(freq * FM_MODULATOR_RATIO, now);
+                    } else if (voice.type === 'ring' && voice.modulator) {
+                        voice.modulator.frequency.setValueAtTime(freq * RING_MOD_RATIO, now);
+                    }
+                } catch(e){}
+            }
+        });
+    }
 
-        activeNodes.carrierOsc.frequency.setValueAtTime(freq, now);
+    function stopAllVoices() {
+        activeVoices.forEach(voice => {
+            if (voice && typeof voice.stop === 'function') {
+                voice.stop();
+            }
+        });
+        activeVoices = [];
+    }
 
-        if (type === 'fm' && activeNodes.modulatorOsc1 && activeNodes.modGain1) {
-            activeNodes.modulatorOsc1.frequency.setValueAtTime(freq * FM_MODULATOR_RATIO, now);
-            activeNodes.modGain1.gain.setValueAtTime(freq * FM_MODULATION_INDEX_SCALE, now);
-        } else if (type === 'ring' && activeNodes.modulatorOsc1) {
-            activeNodes.modulatorOsc1.frequency.setValueAtTime(freq * RING_MOD_RATIO, now);
-        }
+    function clearAllTimeouts() {
+        activeTimeouts.forEach(t => clearTimeout(t));
+        activeTimeouts = [];
     }
 
     function initAudio() {
@@ -191,11 +246,6 @@ document.addEventListener('DOMContentLoaded', () => {
         return new Promise((resolve) => {
             if (!audioContext) {
                 audioContext = new (window.AudioContext || window.webkitAudioContext)();
-                mainGainNode = audioContext.createGain();
-                mainGainNode.gain.value = 0;
-                mainGainNode.connect(audioContext.destination);
-                
-                rebuildAudioGraph();
             }
             audioContext.resume().then(() => {
                 statusDiv.textContent = "Audio Ready";
@@ -210,25 +260,7 @@ document.addEventListener('DOMContentLoaded', () => {
         if (!audioContext || audioContext.state !== 'running') initAudio();
     }, { once: true });
 
-    // --- Tone Control ---
-    function toneOn() {
-        if (!audioContext) return;
-        const vol = parseFloat(document.getElementById('synth-volume').value);
-        mainGainNode.gain.cancelScheduledValues(audioContext.currentTime);
-        mainGainNode.gain.setTargetAtTime(vol, audioContext.currentTime, attackTime);
-    }
-
-    function toneOff() {
-        if (!audioContext) return;
-        mainGainNode.gain.cancelScheduledValues(audioContext.currentTime);
-        mainGainNode.gain.setTargetAtTime(0, audioContext.currentTime, releaseTime);
-    }
-
     // --- Settings Listeners ---
-    document.getElementById('synth-waveform').addEventListener('change', () => {
-        rebuildAudioGraph();
-    });
-
     document.getElementById('synth-freq').addEventListener('input', (e) => {
         const val = parseFloat(e.target.value);
         document.getElementById('freq-val').textContent = val;
@@ -239,9 +271,7 @@ document.addEventListener('DOMContentLoaded', () => {
         document.getElementById('wpm-val').textContent = e.target.value;
     });
 
-    // --- Encoder Logic (Text to Sound) ---
-    const sleep = (ms) => new Promise(r => setTimeout(r, ms));
-
+    // --- Encoder Logic (Text to Morse) with Audio Thread Scheduling ---
     async function playMorseSequence(text) {
         if (isPlaying) return;
         isPlaying = true;
@@ -252,55 +282,86 @@ document.addEventListener('DOMContentLoaded', () => {
         visualDiv.innerHTML = '';
         const wpm = parseFloat(document.getElementById('synth-wpm').value);
         const dotMs = 1200 / wpm;
+        const dotSec = dotMs / 1000;
         
         let chars = text.toUpperCase().split('');
-        
-        let spans = [];
+        let timeline = [];
+        let currentTimeOffset = 0.05; // Short latency buffer for thread stability
+
         chars.forEach(char => {
             const code = MORSE_DICT[char];
             if (code) {
                 if (code === ' ') {
+                    currentTimeOffset += dotSec * 4;
                     let sp = document.createElement('span');
                     sp.textContent = '   ';
                     visualDiv.appendChild(sp);
-                    spans.push({ char, code: ' ', element: sp });
+                    timeline.push({ type: 'space', element: sp, time: currentTimeOffset });
                 } else {
                     for (let sym of code) {
+                        const duration = (sym === '.' ? dotSec : dotSec * 3);
                         let sp = document.createElement('span');
                         sp.textContent = sym;
                         visualDiv.appendChild(sp);
-                        spans.push({ char, code: sym, element: sp });
+                        
+                        timeline.push({
+                            type: 'sound',
+                            symbol: sym,
+                            element: sp,
+                            time: currentTimeOffset,
+                            duration: duration
+                        });
+                        currentTimeOffset += duration;
+                        currentTimeOffset += dotSec;
                     }
+                    currentTimeOffset += dotSec * 2;
                     let letterSpace = document.createElement('span');
                     letterSpace.textContent = ' ';
                     visualDiv.appendChild(letterSpace);
-                    spans.push({ char: null, code: 'letter_space', element: letterSpace });
+                    timeline.push({ type: 'letter_space', element: letterSpace, time: currentTimeOffset });
                 }
             }
         });
 
-        for (let i = 0; i < spans.length; i++) {
-            if (stopRequested) break;
-            const item = spans[i];
-            
-            if (item.code === '.' || item.code === '-') {
-                item.element.classList.add('active');
-                toneOn();
-                await sleep(item.code === '.' ? dotMs : dotMs * 3);
-                toneOff();
-                item.element.classList.remove('active');
-                await sleep(dotMs);
-            } else if (item.code === 'letter_space') {
-                await sleep(dotMs * 2);
-            } else if (item.code === ' ') {
-                await sleep(dotMs * 6);
+        const startTime = audioContext.currentTime;
+
+        // Schedule all sounds natively onto the high-priority Web Audio timeline
+        timeline.forEach(item => {
+            if (item.type === 'sound') {
+                const voice = createVoice(startTime + item.time, item.duration);
+                if (voice) {
+                    activeVoices.push(voice);
+                }
             }
-        }
-        
-        isPlaying = false;
-        if (document.getElementById('loop-checkbox').checked && !stopRequested && document.getElementById('text-input').value.trim() !== '') {
-            playMorseSequence(document.getElementById('text-input').value); 
-        }
+        });
+
+        // Handle visual DOM updates using loose timeouts (visual delay will not disrupt audio)
+        timeline.forEach(item => {
+            if (item.type === 'sound') {
+                let tOn = setTimeout(() => {
+                    item.element.classList.add('active');
+                }, item.time * 1000);
+
+                let tOff = setTimeout(() => {
+                    item.element.classList.remove('active');
+                }, (item.time + item.duration) * 1000);
+
+                activeTimeouts.push(tOn, tOff);
+            }
+        });
+
+        // Set sequence completed callback
+        const totalDurationSec = currentTimeOffset;
+        let doneTimeout = setTimeout(() => {
+            isPlaying = false;
+            activeVoices = [];
+            
+            if (document.getElementById('loop-checkbox').checked && !stopRequested && document.getElementById('text-input').value.trim() !== '') {
+                playMorseSequence(document.getElementById('text-input').value); 
+            }
+        }, totalDurationSec * 1000);
+
+        activeTimeouts.push(doneTimeout);
     }
 
     document.getElementById('play-btn').addEventListener('click', () => {
@@ -309,12 +370,16 @@ document.addEventListener('DOMContentLoaded', () => {
     
     document.getElementById('stop-btn').addEventListener('click', () => {
         stopRequested = true;
-        toneOff();
+        isPlaying = false;
+        stopAllVoices();
+        clearAllTimeouts();
     });
 
     document.getElementById('clear-btn').addEventListener('click', () => {
         stopRequested = true;
-        toneOff();
+        isPlaying = false;
+        stopAllVoices();
+        clearAllTimeouts();
         document.getElementById('text-input').value = '';
         document.getElementById('morse-visual-display').innerHTML = '';
     });
@@ -345,7 +410,7 @@ document.addEventListener('DOMContentLoaded', () => {
     let isToneCurrentlyOn = false;
     let lastStateChangeTime = 0;
     let currentSymbolBuffer = "";
-    let adaptiveDotMs = 60; // Represents internal memory for 1 'unit' of time
+    let adaptiveDotMs = 60; 
     let wordSpaceAdded = true; 
 
     async function startDecoding() {
@@ -362,13 +427,11 @@ document.addEventListener('DOMContentLoaded', () => {
             startMicBtn.disabled = true;
             stopMicBtn.disabled = false;
             
-            // Reset state
             decodedTextDisplay.textContent = "";
             rawSymbolsDisplay.textContent = "";
             currentSymbolBuffer = "";
             wordSpaceAdded = true;
             
-            // Initial guess based on UI setting, serves as the starting baseline
             const startWpm = parseFloat(document.getElementById('synth-wpm').value);
             adaptiveDotMs = 1200 / startWpm; 
             estimatedWpmDisplay.textContent = `Estimated Speed: ~${Math.round(startWpm)} WPM (Listening...)`;
@@ -394,7 +457,6 @@ document.addEventListener('DOMContentLoaded', () => {
     startMicBtn.addEventListener('click', startDecoding);
     stopMicBtn.addEventListener('click', stopDecoding);
 
-    // The core function continuously observing pulses and adjusting WPM expectations
     function analyzeIncomingSignal() {
         if (!decodingActive) return;
 
@@ -406,7 +468,6 @@ document.addEventListener('DOMContentLoaded', () => {
             if (dataArray[i] > maxEnergy) maxEnergy = dataArray[i];
         }
 
-        // Display Signal Level
         const meterPercent = Math.max(0, Math.min(100, (maxEnergy + 100) * 1.5));
         signalLevel.style.width = `${meterPercent}%`;
 
@@ -416,62 +477,46 @@ document.addEventListener('DOMContentLoaded', () => {
         const duration = now - lastStateChangeTime;
 
         if (toneDetected !== isToneCurrentlyOn) {
-            // STATE HAS CHANGED
             if (!toneDetected) {
-                // Tone just ended, measure length of the pulse
-                if (duration > 20) { // Reject very tiny mic static anomalies
+                if (duration > 20) { 
                     let symbolDetected;
                     
                     if (duration < adaptiveDotMs * 1.8) {
-                        // It's a DOT. Update internal memory using Exponential Moving Average
                         adaptiveDotMs = (adaptiveDotMs * 0.7) + (duration * 0.3);
                         symbolDetected = ".";
                     } else {
-                        // It's a DASH. A dash is roughly 3 dots long. Update internal memory using a third of its length
                         adaptiveDotMs = (adaptiveDotMs * 0.7) + ((duration / 3) * 0.3);
                         symbolDetected = "-";
                     }
 
-                    // Keep memory within sane limits (Between approx 5 WPM and 60 WPM)
                     adaptiveDotMs = Math.max(20, Math.min(240, adaptiveDotMs));
 
-                    // Output estimates
                     const currentWpm = Math.round(1200 / adaptiveDotMs);
                     estimatedWpmDisplay.textContent = `Estimated Speed: ~${currentWpm} WPM`;
 
-                    // Process Symbol
                     currentSymbolBuffer += symbolDetected;
                     rawSymbolsDisplay.textContent += symbolDetected;
-                    
-                    // Auto-scroll to bottom of raw symbols window
                     rawSymbolsDisplay.scrollTop = rawSymbolsDisplay.scrollHeight;
                 }
             } 
-            // Save state
             isToneCurrentlyOn = toneDetected;
             lastStateChangeTime = now;
         } else if (!toneDetected && currentSymbolBuffer.length > 0) {
-            // WE ARE IN A SILENCE PAUSE - See if it's long enough to identify as letter completion
             if (duration > adaptiveDotMs * 2.5) {
                 const char = REVERSE_MORSE[currentSymbolBuffer];
                 
                 if (char) decodedTextDisplay.textContent += char;
                 else decodedTextDisplay.textContent += "?";
                 
-                // Keep scroll at bottom
                 decodedTextDisplay.scrollTop = decodedTextDisplay.scrollHeight;
-                
                 currentSymbolBuffer = "";
                 wordSpaceAdded = false;
-
-                // Put a visual gap in the raw pulse display
                 rawSymbolsDisplay.textContent += " ";
             }
         } else if (!toneDetected && currentSymbolBuffer.length === 0 && !wordSpaceAdded) {
-            // WE ARE IN A LONG SILENCE PAUSE - See if it's an inter-word gap
             if (duration > adaptiveDotMs * 5.5) {
                 decodedTextDisplay.textContent += " ";
-                rawSymbolsDisplay.textContent += " / "; // Use slash to denote word separation in raw
+                rawSymbolsDisplay.textContent += " / "; 
                 wordSpaceAdded = true;
             }
         }

@@ -8,6 +8,8 @@ CSS, and JavaScript.
 
 ## Play it now: https://pemmyz.github.io/js_morsesound/
 
+![screenshot](screenshots/game_1.png)
+
 ## Features
 
 -   **Text → Morse transmitter**

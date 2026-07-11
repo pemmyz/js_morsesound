@@ -238,6 +238,44 @@ document.addEventListener('DOMContentLoaded', () => {
         activeVoices = [];
     }
 
+    // --- Settings Listeners & Frequency Unlock Configuration ---
+    const synthFreqInput = document.getElementById('synth-freq');
+    const freqValDisplay = document.getElementById('freq-val');
+    const freqUnlockCheckbox = document.getElementById('freq-unlock');
+
+    synthFreqInput.addEventListener('input', (e) => {
+        const val = parseFloat(e.target.value);
+        freqValDisplay.textContent = val;
+        updateFrequency(val);
+    });
+
+    freqUnlockCheckbox.addEventListener('change', (e) => {
+        const unlocked = e.target.checked;
+        if (unlocked) {
+            synthFreqInput.min = "50";
+            synthFreqInput.max = "8000";
+        } else {
+            synthFreqInput.min = "200";
+            synthFreqInput.max = "1200";
+            
+            // Clamp value if it went outside the standard limits while unlocked
+            let val = parseFloat(synthFreqInput.value);
+            if (val < 200) {
+                val = 200;
+            } else if (val > 1200) {
+                val = 1200;
+            }
+            synthFreqInput.value = val;
+            freqValDisplay.textContent = val;
+            updateFrequency(val);
+        }
+    });
+
+    document.getElementById('synth-wpm').addEventListener('input', (e) => {
+        document.getElementById('wpm-val').textContent = e.target.value;
+    });
+
+    // --- Timeouts & Initialization Helpers ---
     function clearAllTimeouts() {
         activeTimeouts.forEach(t => clearTimeout(t));
         activeTimeouts = [];
@@ -262,17 +300,6 @@ document.addEventListener('DOMContentLoaded', () => {
         if (!audioContext || audioContext.state !== 'running') initAudio();
     }, { once: true });
 
-    // --- Settings Listeners ---
-    document.getElementById('synth-freq').addEventListener('input', (e) => {
-        const val = parseFloat(e.target.value);
-        document.getElementById('freq-val').textContent = val;
-        updateFrequency(val);
-    });
-
-    document.getElementById('synth-wpm').addEventListener('input', (e) => {
-        document.getElementById('wpm-val').textContent = e.target.value;
-    });
-
     // --- Encoder Logic (Text to Sound) with Lookahead Scheduler ---
     async function playMorseSequence(text) {
         if (isPlaying) return;
@@ -296,7 +323,6 @@ document.addEventListener('DOMContentLoaded', () => {
                 if (code === ' ') {
                     currentTimeOffset += dotSec * 4;
                     let sp = document.createElement('span');
-                    // Use CSS layout dimensions instead of literal spaces to avoid missing glyph square boxes
                     sp.style.display = 'inline-block';
                     sp.style.width = '1.5ch'; 
                     visualDiv.appendChild(sp);
@@ -320,7 +346,6 @@ document.addEventListener('DOMContentLoaded', () => {
                     }
                     currentTimeOffset += dotSec * 2;
                     let letterSpace = document.createElement('span');
-                    // Use CSS layout dimensions instead of literal spaces to avoid missing glyph square boxes
                     letterSpace.style.display = 'inline-block';
                     letterSpace.style.width = '0.5ch';
                     visualDiv.appendChild(letterSpace);

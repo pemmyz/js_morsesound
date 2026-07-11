@@ -141,6 +141,21 @@ body.mobile-mode .action-buttons { margin: 10px 0; }
 }
 .control-group label { font-size: 0.9em; font-weight: bold; }
 
+/* UNLOCK CHECKBOX STYLE */
+.unlock-label {
+    font-size: 0.8em !important;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    margin-top: 4px;
+    cursor: pointer;
+    opacity: 0.8;
+    user-select: none;
+}
+.unlock-label:hover {
+    opacity: 1;
+}
+
 select, button, input[type="range"] {
     padding: 5px;
     border-radius: 4px;
